@@ -1,58 +1,83 @@
-# PW Portal — Complete PHP Website
+# PW Portal v2 — Complete Setup Guide
 
-## File Structure
+## Files
 ```
-pw_website/
-├── index.php           ← Login page (OTP + Token)
-├── dashboard.php       ← User courses dashboard
-├── batch.php           ← Batch/course detail page
-├── .htaccess           ← Security rules
+pw_v2/
+├── index.php           ← Login (OTP + Token) — BUG FIXED
+├── dashboard.php       ← User's batch list
+├── batch.php           ← Batch → Subjects
+├── subject.php         ← Subject → Videos / Notes / DPP + Video Player
+├── .htaccess           ← Security
 ├── includes/
-│   ├── config.php      ← API keys & admin credentials
-│   ├── api.php         ← All PW API functions
+│   ├── config.php      ← API constants + admin credentials
+│   ├── api.php         ← All PW API calls (mapped from Python file)
 │   └── auth.php        ← Session management
 ├── admin/
-│   ├── index.php       ← Admin login (/admin)
-│   └── dashboard.php   ← Admin panel (users + tokens)
+│   ├── index.php       ← Admin login (matrix animation)
+│   └── dashboard.php   ← Full user management + Bearer tokens
 └── data/
-    ├── .htaccess       ← Blocks web access to data
-    └── users.json      ← User database (auto-created)
+    ├── .htaccess       ← Blocks web access
+    └── users.json      ← Auto-created user database
 ```
 
-## Setup
+## Setup (2 minutes)
 
-1. Upload all files to your PHP server (PHP 7.4+, cURL enabled)
-2. Make sure `data/` folder is writable: `chmod 755 data/`
+1. Upload `pw_v2/` folder to your PHP server (PHP 7.4+ with cURL)
+2. Make `data/` writable:
+   ```bash
+   chmod 755 data/
+   ```
 3. **Change admin password** in `includes/config.php`:
    ```php
-   define('ADMIN_PASSWORD_HASH', hash('sha256', 'YourNewPasswordHere'));
+   define('ADMIN_PASS_HASH', hash('sha256', 'YourNewPassword'));
    ```
 
-## Access
+## Access URLs
 
-- **User Login:** `https://yourdomain.com/`
-- **Admin Panel:** `https://yourdomain.com/admin/`
-  - Default username: `admin`
-  - Default password: `Admin@PW#2024` ← **CHANGE THIS!**
+| Page | URL |
+|------|-----|
+| User Login | `yourdomain.com/index.php` |
+| Admin Login | `yourdomain.com/admin/index.php` |
+| Admin Panel | `yourdomain.com/admin/dashboard.php` |
 
-## Security Features
+Default admin: `admin` / `Admin@PW#Secure2024`
 
-- Passwords stored as SHA-256 hash (never plain text)
-- Admin credentials never exposed to frontend/inspector
-- Tokens visible only in admin panel (not in frontend HTML)
-- Session regeneration on login
-- HttpOnly cookies
-- .htaccess blocks direct access to `/includes/` and `/data/`
-- DevTools / Right-click blocked on admin and login pages
-- Constant-time comparison to prevent timing attacks
-- 1-second delay on wrong admin login (brute-force protection)
-- X-Frame-Options, XSS protection headers
+## What's Fixed & Added
 
-## How It Works
+### Bug Fix: OTP Login
+- Old code failed if PW API returned any non-standard response body
+- NEW: Only checks HTTP status code 200, not response body
+- OTP sends → user goes straight to OTP verification screen
 
-1. User visits `index.php` → enters phone → gets OTP via PW API
-2. Enters OTP → gets access_token + refresh_token
-3. OR pastes token directly (Token tab)
-4. Token validated → user stored in `data/users.json`
-5. Dashboard shows all purchased PW batches
-6. Admin at `/admin` sees ALL users, their tokens, login count, etc.
+### Bearer Token Flow
+- User logs in via OTP → `access_token` extracted from PW API response
+- Token stored in `data/users.json` with full history
+- Admin panel shows: `Authorization: Bearer eyJ...` format
+- Copy buttons: "Copy Token" (raw) and "Copy Bearer" (with Bearer prefix)
+
+### Admin Panel
+- Card-based responsive layout
+- Each card shows: name, phone, login count, token count, batches
+- Full Bearer token with expand + copy buttons
+- Token history (last 10 tokens stored)
+- Sorted by most recent login
+- Search by name or phone
+
+### User Flow
+1. Login → Dashboard (all batches)
+2. Click batch → Subjects list
+3. Click subject → Videos / Notes / DPP tabs
+4. Click video → Modal player (HLS M3U8 supported)
+
+### Video Player
+- Opens in modal overlay
+- HLS.js library for M3U8 streams
+- URL transform from Python: `d1d34p8vz63oiq` → `d26g5bnklkwsh4`, `.mpd` → `.m3u8`
+
+## Security
+- Admin password: SHA-256 hashed, never plain text
+- Tokens: never in page HTML (admin panel only)
+- DevTools/F12 blocked on login & admin pages
+- `/data/` and `/includes/` blocked from web access
+- Session cookies: HttpOnly, SameSite=Strict
+- Brute force delay on wrong admin login
