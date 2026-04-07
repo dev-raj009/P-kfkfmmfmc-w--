@@ -1,441 +1,370 @@
 <?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/api.php';
-
+session_boot();
 require_admin();
 
-// Logout
-if (($_GET['logout'] ?? '') === '1') {
-    unset($_SESSION['admin_logged_in'], $_SESSION['admin_login_time']);
-    header('Location: /admin/index.php');
-    exit;
+// Actions
+if (isset($_GET['logout'])) { logout_admin(); header('Location: /admin/index.php'); exit; }
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!empty($_POST['del'])) { user_delete($_POST['del']); header('Location: /admin/dashboard.php?msg=deleted'); exit; }
 }
 
-// Delete user
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_user'])) {
-    $phone = $_POST['delete_user'];
-    $users = users_load();
-    unset($users[$phone]);
-    users_save($users);
-    header('Location: /admin/dashboard.php?msg=User+deleted');
-    exit;
-}
+$users  = users_load();
+$search = trim($_GET['q'] ?? '');
+$msg    = $_GET['msg'] ?? '';
 
-// Refresh batch count for a user (AJAX)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['refresh_batches'])) {
-    $phone = $_POST['refresh_batches'];
-    $users = users_load();
-    if (isset($users[$phone])) {
-        $token = $users[$phone]['access_token'] ?? '';
-        if ($token) {
-            $count = pw_get_batch_count($token);
-            $users[$phone]['batch_count'] = $count;
-            $users[$phone]['batch_count_updated'] = date('Y-m-d H:i:s');
-            users_save($users);
-        }
-    }
-    header('Location: /admin/dashboard.php?msg=Batch+count+updated');
-    exit;
-}
-
-$users   = users_load();
-$total   = count($users);
-$search  = trim($_GET['q'] ?? '');
-$msg     = htmlspecialchars($_GET['msg'] ?? '');
-
-// Aggregate stats
-$totalLogins  = array_sum(array_column($users, 'login_count'));
-$totalTokens  = count(array_filter($users, fn($u) => !empty($u['access_token'])));
-$today        = date('Y-m-d');
-$activeToday  = count(array_filter($users, fn($u) => str_starts_with($u['last_login'] ?? '', $today)));
+// Sort: most recent login first
+uasort($users, fn($a,$b) => strcmp($b['last_login'] ?? '', $a['last_login'] ?? ''));
 
 // Filter
 $filtered = $users;
 if ($search) {
     $filtered = array_filter($users, fn($u) =>
         str_contains(strtolower($u['phone'] ?? ''), strtolower($search)) ||
-        str_contains(strtolower($u['name'] ?? ''), strtolower($search))
+        str_contains(strtolower($u['name']  ?? ''), strtolower($search))
     );
 }
 
-// Sort by last login
-uasort($filtered, fn($a, $b) => strcmp($b['last_login'] ?? '', $a['last_login'] ?? ''));
+$total       = count($users);
+$today       = date('Y-m-d');
+$activeToday = count(array_filter($users, fn($u) => str_starts_with($u['last_login'] ?? '', $today)));
+$totalTokens = array_sum(array_column($users, 'token_count'));
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Admin Panel — PW Portal</title>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Admin Dashboard — PW Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#06060e;--surface:#0a0a16;--card:#0e0e1c;--border:#181826;
-  --accent:#f97316;--text:#e8e8ff;--muted:#545472;
-  --success:#22c55e;--danger:#ef4444;--radius:12px;
+  --bg:#04040c;--s1:#08081a;--s2:#0c0c22;
+  --card:#0a0a1e;--card2:#0e0e28;
+  --border:#161630;--border2:#202040;
+  --accent:#f97316;--accent2:#fb923c;
+  --purple:#7c3aed;--blue:#3b82f6;
+  --text:#eeeeff;--muted:#55557a;--muted2:#8080aa;
+  --success:#22c55e;--danger:#ef4444;--warn:#f59e0b;
+  --r:14px;
 }
-body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+html,body{min-height:100%;font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(--text)}
 
-/* ── Sidebar ── */
+/* Layout */
 .layout{display:flex;min-height:100vh}
-aside{width:240px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;height:100vh;z-index:50}
-.aside-logo{padding:20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
-.logo-box{width:36px;height:36px;background:linear-gradient(135deg,#f97316,#ea580c);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
-.logo-text{font-family:'Syne',sans-serif;font-size:15px;font-weight:800}
-.logo-text span{color:var(--accent)}
-.aside-label{padding:16px 20px 8px;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
-.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;color:var(--muted);text-decoration:none;font-size:14px;transition:all .2s;border-left:3px solid transparent}
-.nav-item:hover{color:var(--text);background:rgba(255,255,255,.04)}
-.nav-item.active{color:var(--accent);background:rgba(249,115,22,.08);border-left-color:var(--accent)}
-.nav-icon{font-size:16px;width:20px;text-align:center}
-.aside-footer{margin-top:auto;padding:20px;border-top:1px solid var(--border)}
-.logout-link{display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;color:#fca5a5;text-decoration:none;font-size:13px;transition:all .2s}
-.logout-link:hover{background:rgba(239,68,68,.15)}
 
-/* ── Main ── */
-.main{margin-left:240px;flex:1;display:flex;flex-direction:column}
-.topbar{padding:0 28px;height:60px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);background:rgba(6,6,14,.95);backdrop-filter:blur(16px);position:sticky;top:0;z-index:40}
-.topbar-title{font-family:'Syne',sans-serif;font-size:16px;font-weight:700}
-.admin-chip{display:flex;align-items:center;gap:8px;padding:6px 12px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.25);border-radius:100px;font-size:12px;color:#fb923c}
-.dot-live{width:7px;height:7px;border-radius:50%;background:var(--success);animation:blink 2s step-end infinite}
+/* Sidebar */
+aside{width:230px;background:var(--s1);border-right:1px solid var(--border);position:fixed;height:100vh;z-index:50;display:flex;flex-direction:column;overflow-y:auto}
+.aside-top{padding:22px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.alogo{width:34px;height:34px;background:linear-gradient(135deg,#f97316,#ea580c);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.abrand{font-weight:800;font-size:15px;letter-spacing:-.01em}
+.abrand span{color:var(--accent)}
+.aside-sect{padding:14px 18px 6px;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.12em;text-transform:uppercase}
+.alink{display:flex;align-items:center;gap:10px;padding:9px 18px;color:var(--muted2);text-decoration:none;font-size:13px;font-weight:600;border-left:2px solid transparent;transition:all .2s}
+.alink:hover{color:var(--text);background:rgba(255,255,255,.04)}
+.alink.act{color:var(--accent);background:rgba(249,115,22,.08);border-left-color:var(--accent)}
+.alink-ic{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+.aside-bot{margin-top:auto;padding:18px;border-top:1px solid var(--border)}
+.logout-btn{display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:10px;color:#fca5a5;text-decoration:none;font-size:13px;font-weight:600;transition:all .2s}
+.logout-btn:hover{background:rgba(239,68,68,.18)}
+.live-badge{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:11px;color:var(--success);font-family:'JetBrains Mono',monospace}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--success);animation:blink 2s infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 
-.content{padding:24px 28px;flex:1}
+/* Main */
+.main{margin-left:230px;flex:1;display:flex;flex-direction:column}
 
-/* ── Stats Grid ── */
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:28px}
-.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;position:relative;overflow:hidden}
-.stat-card::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),#7c3aed)}
-.stat-card.green::after{background:linear-gradient(90deg,#22c55e,#16a34a)}
-.stat-card.blue::after{background:linear-gradient(90deg,#0ea5e9,#6366f1)}
-.stat-num{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;margin-bottom:3px}
-.stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.stat-icon{position:absolute;top:14px;right:14px;font-size:22px;opacity:.25}
+/* Topbar */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:0 30px;height:58px;background:rgba(4,4,12,.95);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:40;gap:16px}
+.tb-title{font-weight:800;font-size:15px;white-space:nowrap}
+.tb-search{flex:1;max-width:380px}
+.tb-search form{position:relative;display:flex}
+.tb-search input{width:100%;padding:9px 14px 9px 36px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:13px;outline:none;transition:all .2s}
+.tb-search input:focus{border-color:var(--accent);background:rgba(249,115,22,.06)}
+.tb-search::before{content:'🔍';position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:13px;pointer-events:none;z-index:1}
+.tb-right{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.admin-pill{display:flex;align-items:center;gap:6px;padding:6px 12px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.2);border-radius:100px;font-size:12px;color:#fb923c;font-weight:700}
 
-/* ── Search Toolbar ── */
-.toolbar{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}
-.search-box{flex:1;min-width:200px;position:relative}
-.search-box input{width:100%;padding:10px 14px 10px 38px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;transition:all .2s}
-.search-box input:focus{border-color:var(--accent);background:rgba(249,115,22,.05)}
-.search-box::before{content:'🔍';position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:14px}
+/* Content */
+.content{padding:28px 30px;flex:1}
 
-/* ── Table ── */
-.table-wrap{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.table-head{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
-.table-title{font-family:'Syne',sans-serif;font-size:14px;font-weight:700}
-table{width:100%;border-collapse:collapse}
-thead tr{background:rgba(255,255,255,.03)}
-th{padding:11px 14px;text-align:left;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border);white-space:nowrap}
-tbody tr{border-bottom:1px solid rgba(255,255,255,.04);transition:background .15s}
-tbody tr:last-child{border-bottom:none}
-tbody tr:hover{background:rgba(249,115,22,.04)}
-td{padding:12px 14px;font-size:13px;vertical-align:middle}
+/* Stats row */
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:28px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;position:relative;overflow:hidden}
+.stat::after{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.stat.s-orange::after{background:linear-gradient(90deg,#f97316,#fb923c)}
+.stat.s-purple::after{background:linear-gradient(90deg,#7c3aed,#a78bfa)}
+.stat.s-blue::after{background:linear-gradient(90deg,#3b82f6,#60a5fa)}
+.stat.s-green::after{background:linear-gradient(90deg,#22c55e,#4ade80)}
+.stat-n{font-size:28px;font-weight:800;font-family:'JetBrains Mono',monospace;margin-bottom:4px}
+.stat-l{font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:.06em}
+.stat-ic{position:absolute;top:14px;right:14px;font-size:26px;opacity:.25}
 
-/* User cell */
-.user-cell{display:flex;align-items:center;gap:10px}
-.user-ava{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#f97316,#7c3aed);display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;flex-shrink:0;color:#fff}
-.user-name-main{font-weight:500;margin-bottom:2px}
-.user-phone-sub{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
+/* Toolbar */
+.toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px}
+.t-left{font-size:14px;font-weight:700}
+.t-right{font-size:12px;color:var(--muted2)}
+.t-count{font-family:'JetBrains Mono',monospace;color:var(--accent)}
 
-/* Token */
-.token-wrap{display:flex;align-items:center;gap:6px}
-.token-text{font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:rgba(255,255,255,.04);padding:3px 7px;border-radius:5px;border:1px solid var(--border);cursor:pointer;transition:all .2s;user-select:all}
-.token-text:hover{border-color:var(--accent);color:var(--accent)}
-.copy-btn{padding:3px 7px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.2);border-radius:5px;color:#fb923c;font-size:10px;cursor:pointer;font-family:'DM Mono',monospace;white-space:nowrap;transition:all .2s}
-.copy-btn:hover{background:rgba(249,115,22,.2)}
-.copy-btn.copied{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.3);color:#86efac}
+/* User cards grid */
+.ucards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:18px}
 
-/* Badges */
-.badge-count{display:inline-block;padding:2px 8px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.2);border-radius:100px;font-size:11px;color:#fb923c;font-family:'DM Mono',monospace}
-.badge-batch{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(14,165,233,.1);border:1px solid rgba(14,165,233,.2);border-radius:100px;font-size:11px;color:#7dd3fc;font-family:'DM Mono',monospace}
-.badge-na{color:var(--muted);font-size:11px;font-family:'DM Mono',monospace}
+/* User card */
+.ucard{background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;transition:border-color .3s}
+.ucard:hover{border-color:var(--border2)}
+.ucard-head{padding:16px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.uava{width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#f97316,#7c3aed);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;flex-shrink:0}
+.uinfo{flex:1;min-width:0}
+.uname{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.uphone{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted2);margin-top:2px}
+.ubadge{padding:3px 8px;border-radius:100px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.badge-active{background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);color:#4ade80}
+.badge-old{background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--muted2)}
 
-/* Login time */
-.login-time{font-size:11px;font-family:'DM Mono',monospace;color:var(--muted)}
-.login-time-main{color:var(--text);font-size:12px}
+.ucard-body{padding:14px 18px}
 
-/* Actions */
-.del-btn{padding:4px 9px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;color:#fca5a5;font-size:11px;cursor:pointer;transition:all .2s}
+/* Token block */
+.token-block{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:14px}
+.tb-label{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.tb-label .ticon{color:var(--accent)}
+.token-text{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted2);word-break:break-all;line-height:1.5;max-height:44px;overflow:hidden;position:relative;cursor:pointer;transition:color .2s}
+.token-text:hover{color:var(--text)}
+.token-text.expanded{max-height:none}
+.token-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.tbtn{padding:5px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;border:none;font-family:inherit;transition:all .2s;display:inline-flex;align-items:center;gap:4px}
+.tbtn-copy{background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.2);color:#fb923c}
+.tbtn-copy:hover{background:rgba(249,115,22,.2)}
+.tbtn-copy.copied{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.2);color:#4ade80}
+.tbtn-expand{background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--muted2)}
+.tbtn-expand:hover{color:var(--text);background:rgba(255,255,255,.09)}
+
+/* Info grid inside card */
+.uinfo-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.uig{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.uig-v{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:var(--accent);margin-bottom:2px}
+.uig-l{font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.06em}
+
+/* Time */
+.utime{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-bottom:14px}
+
+/* Card footer */
+.ucard-foot{padding:10px 18px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.del-btn{padding:6px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:7px;color:#fca5a5;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s}
 .del-btn:hover{background:rgba(239,68,68,.2)}
-.refresh-btn{padding:4px 9px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:6px;color:#86efac;font-size:11px;cursor:pointer;transition:all .2s;margin-bottom:4px}
-.refresh-btn:hover{background:rgba(34,197,94,.15)}
+.view-front{padding:6px 12px;background:rgba(249,115,22,.08);border:1px solid rgba(249,115,22,.2);border-radius:7px;color:#fb923c;font-size:11px;font-weight:700;text-decoration:none;transition:all .2s}
+.view-front:hover{background:rgba(249,115,22,.18)}
 
-.empty-row td{text-align:center;padding:60px 20px;color:var(--muted)}
-.alert{padding:12px 16px;border-radius:8px;margin-bottom:20px;font-size:13px}
-.alert-success{background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);color:#86efac}
+/* Alert */
+.alert-ok{padding:12px 16px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:10px;color:#4ade80;font-size:13px;margin-bottom:20px;display:flex;align-items:center;gap:8px}
 
-/* ── Token Modal ── */
-.modal{display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.8);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:20px}
-.modal.open{display:flex}
-.modal-box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:580px;width:100%}
-.modal-title{font-family:'Syne',sans-serif;font-size:15px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between}
-.modal-close{cursor:pointer;color:var(--muted);font-size:20px;background:none;border:none}
-.modal-token{font-family:'DM Mono',monospace;font-size:11px;word-break:break-all;background:rgba(255,255,255,.04);padding:14px;border-radius:8px;border:1px solid var(--border);color:var(--text);margin-bottom:14px;line-height:1.7;user-select:all;max-height:160px;overflow-y:auto}
-.modal-copy{padding:10px 20px;background:var(--accent);border:none;border-radius:8px;color:#fff;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;transition:all .2s}
+/* Empty */
+.empty{text-align:center;padding:60px 20px;border:1px dashed var(--border);border-radius:16px}
 
-/* ── User Detail Panel ── */
-.detail-panel{display:none;position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px}
-.detail-panel.open{display:flex}
-.detail-box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:28px;max-width:520px;width:100%;max-height:85vh;overflow-y:auto}
-.detail-box h2{font-family:'Syne',sans-serif;font-size:16px;font-weight:800;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center}
-.detail-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px;gap:10px}
-.detail-row:last-child{border-bottom:none}
-.detail-key{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding-top:2px}
-.detail-val{font-family:'DM Mono',monospace;font-size:12px;text-align:right;word-break:break-all;max-width:300px}
-
-@media(max-width:900px){aside{display:none}.main{margin-left:0}}
-@media(max-width:600px){.content{padding:16px}.stats-grid{grid-template-columns:repeat(2,1fr)}}
+/* Responsive */
+@media(max-width:900px){aside{display:none}.main{margin-left:0}.ucards{grid-template-columns:1fr}}
+@media(max-width:640px){.content{padding:20px 16px}.topbar{padding:0 16px}.stats{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
 <div class="layout">
+
   <!-- Sidebar -->
   <aside>
-    <div class="aside-logo">
-      <div class="logo-box">🔐</div>
-      <div class="logo-text">PW<span>Admin</span></div>
+    <div class="aside-top">
+      <div class="alogo">🔐</div>
+      <div class="abrand">PW<span>Admin</span></div>
     </div>
-    <div class="aside-label">Menu</div>
-    <a href="/admin/dashboard.php" class="nav-item active"><span class="nav-icon">👥</span>Users & Tokens</a>
-    <a href="/dashboard.php" target="_blank" class="nav-item"><span class="nav-icon">🌐</span>View Frontend</a>
-    <div class="aside-footer">
-      <a href="?logout=1" class="logout-link"><span>🚪</span>Logout Admin</a>
+    <div class="aside-sect">Navigation</div>
+    <a href="/admin/dashboard.php" class="alink act"><span class="alink-ic">👥</span>Users & Tokens</a>
+    <a href="/dashboard.php" target="_blank" class="alink"><span class="alink-ic">🌐</span>View Frontend</a>
+    <a href="/index.php" target="_blank" class="alink"><span class="alink-ic">🔑</span>Login Page</a>
+    <div class="aside-bot">
+      <a href="?logout=1" class="logout-btn"><span>🚪</span>Logout</a>
+      <div class="live-badge"><div class="live-dot"></div>Admin Session Active</div>
     </div>
   </aside>
 
+  <!-- Main -->
   <div class="main">
-    <!-- Topbar -->
     <div class="topbar">
-      <span class="topbar-title">Admin Dashboard</span>
-      <div class="admin-chip"><div class="dot-live"></div>Logged in as Admin</div>
+      <span class="tb-title">User Management</span>
+      <div class="tb-search">
+        <form method="GET">
+          <input type="text" name="q" value="<?= htmlspecialchars($search) ?>" placeholder="Search by name or phone...">
+        </form>
+      </div>
+      <div class="tb-right">
+        <div class="admin-pill">🔐 Admin</div>
+        <?php if ($search): ?><a href="/admin/dashboard.php" style="padding:6px 12px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:8px;color:var(--muted2);text-decoration:none;font-size:12px;font-weight:600">✕ Clear</a><?php endif; ?>
+      </div>
     </div>
 
     <div class="content">
-      <?php if ($msg): ?>
-        <div class="alert alert-success">✓ <?= $msg ?></div>
-      <?php endif; ?>
+      <?php if ($msg === 'deleted'): ?><div class="alert-ok">✓ User deleted successfully.</div><?php endif; ?>
 
-      <!-- ── Stats ── -->
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-num"><?= $total ?></div>
-          <div class="stat-label">Total Users</div>
-          <div class="stat-icon">👥</div>
+      <!-- Stats -->
+      <div class="stats">
+        <div class="stat s-orange">
+          <div class="stat-n"><?= $total ?></div>
+          <div class="stat-l">Total Users</div>
+          <div class="stat-ic">👥</div>
         </div>
-        <div class="stat-card blue">
-          <div class="stat-num"><?= $totalTokens ?></div>
-          <div class="stat-label">Active Tokens</div>
-          <div class="stat-icon">🔑</div>
+        <div class="stat s-green">
+          <div class="stat-n"><?= $activeToday ?></div>
+          <div class="stat-l">Active Today</div>
+          <div class="stat-ic">📅</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-num"><?= $totalLogins ?></div>
-          <div class="stat-label">Total Logins</div>
-          <div class="stat-icon">🔢</div>
+        <div class="stat s-purple">
+          <div class="stat-n"><?= $totalTokens ?></div>
+          <div class="stat-l">Total Tokens</div>
+          <div class="stat-ic">🔑</div>
         </div>
-        <div class="stat-card green">
-          <div class="stat-num"><?= $activeToday ?></div>
-          <div class="stat-label">Active Today</div>
-          <div class="stat-icon">📅</div>
+        <div class="stat s-blue">
+          <div class="stat-n"><?= count($filtered) ?></div>
+          <div class="stat-l">Shown</div>
+          <div class="stat-ic">🔍</div>
         </div>
       </div>
 
-      <!-- ── Toolbar ── -->
       <div class="toolbar">
-        <form method="GET" style="flex:1;display:flex;gap:10px">
-          <div class="search-box">
-            <input type="text" name="q" value="<?= htmlspecialchars($search) ?>" placeholder="Search by name or phone..."/>
-          </div>
-          <button type="submit" style="padding:10px 16px;background:var(--accent);border:none;border-radius:8px;color:#fff;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;cursor:pointer">Search</button>
-          <?php if ($search): ?>
-            <a href="/admin/dashboard.php" style="padding:10px 14px;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:8px;color:var(--muted);text-decoration:none;font-size:13px">Clear</a>
-          <?php endif; ?>
-        </form>
-        <span style="font-size:12px;color:var(--muted);white-space:nowrap"><?= count($filtered) ?> of <?= $total ?> users</span>
+        <span class="t-left">📋 User Registry <span class="t-count">(<?= count($filtered) ?>)</span></span>
+        <span class="t-right">Sorted by most recent login · Tokens are Bearer tokens from PW API</span>
       </div>
 
-      <!-- ── Table ── -->
-      <div class="table-wrap">
-        <div class="table-head">
-          <span class="table-title">User Registry & Tokens</span>
-          <span style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">🔒 Secure View</span>
-        </div>
-        <div style="overflow-x:auto">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>User</th>
-              <th>Access Token</th>
-              <th>Last Login</th>
-              <th>Logins</th>
-              <th>Batches</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php if (empty($filtered)): ?>
-              <tr class="empty-row"><td colspan="7">No users found</td></tr>
-            <?php else: $i = 1; foreach ($filtered as $phone => $u): ?>
-            <?php
-              $at = $u['access_token'] ?? '';
-              $name = $u['name'] ?: $phone;
-              $batchCount = $u['batch_count'] ?? null;
-              $batchUpdated = $u['batch_count_updated'] ?? null;
-              $lastLogin = $u['last_login'] ?? '—';
-              $loginCount = (int)($u['login_count'] ?? 1);
-            ?>
-            <tr>
-              <td style="color:var(--muted);font-family:'DM Mono',monospace;font-size:11px"><?= $i++ ?></td>
-              <td>
-                <div class="user-cell">
-                  <div class="user-ava"><?= strtoupper(mb_substr($u['name'] ?: 'U', 0, 1)) ?></div>
-                  <div>
-                    <div class="user-name-main"><?= htmlspecialchars($u['name'] ?: '—') ?></div>
-                    <div class="user-phone-sub"><?= htmlspecialchars($phone) ?></div>
+      <?php if (empty($filtered)): ?>
+      <div class="empty">
+        <div style="font-size:48px;margin-bottom:12px">🔍</div>
+        <div style="font-size:18px;font-weight:800;margin-bottom:8px">No users found</div>
+        <p style="color:var(--muted2);font-size:14px">No users have logged in yet or search found nothing.</p>
+      </div>
+      <?php else: ?>
+      <div class="ucards">
+        <?php foreach ($filtered as $ph => $u):
+          $accessTok  = $u['access_token']  ?? '';
+          $refreshTok = $u['refresh_token'] ?? '';
+          $uname      = $u['name']          ?? '';
+          $loginCnt   = $u['login_count']   ?? 1;
+          $tokCnt     = $u['token_count']   ?? 1;
+          $batchCnt   = $u['batch_count']   ?? 0;
+          $lastLogin  = $u['last_login']    ?? '—';
+          $firstLogin = $u['first_login']   ?? '—';
+          $isToday    = str_starts_with($lastLogin, $today);
+          $initials   = strtoupper(mb_substr($uname ?: $ph, 0, 2));
+          $uid        = 'u' . md5($ph);
+        ?>
+        <div class="ucard">
+          <!-- Head -->
+          <div class="ucard-head">
+            <div class="uava"><?= $initials ?></div>
+            <div class="uinfo">
+              <div class="uname"><?= htmlspecialchars($uname ?: 'Unknown User') ?></div>
+              <div class="uphone">+91 <?= htmlspecialchars($ph) ?></div>
+            </div>
+            <span class="ubadge <?= $isToday?'badge-active':'badge-old' ?>"><?= $isToday?'🟢 Today':'Inactive' ?></span>
+          </div>
+
+          <!-- Body -->
+          <div class="ucard-body">
+            <!-- Time info -->
+            <div class="utime">⏱ Last login: <?= htmlspecialchars($lastLogin) ?></div>
+
+            <!-- Info grid -->
+            <div class="uinfo-grid">
+              <div class="uig"><div class="uig-v"><?= $loginCnt ?></div><div class="uig-l">Total Logins</div></div>
+              <div class="uig"><div class="uig-v"><?= $tokCnt ?></div><div class="uig-l">Total Tokens</div></div>
+              <div class="uig"><div class="uig-v"><?= $batchCnt ?: '—' ?></div><div class="uig-l">Batches</div></div>
+              <div class="uig"><div class="uig-v" style="font-size:11px;word-break:break-all;color:var(--muted2)"><?= htmlspecialchars(mb_substr($u['email'] ?? '—', 0, 22)) ?></div><div class="uig-l">Email</div></div>
+            </div>
+
+            <!-- Access Token -->
+            <div class="token-block">
+              <div class="tb-label"><span class="ticon">🔑</span>Bearer Access Token</div>
+              <?php if ($accessTok): ?>
+                <div class="token-text" id="at_<?= $uid ?>" onclick="toggleExpand('at_<?= $uid ?>')">Authorization: Bearer <?= htmlspecialchars($accessTok) ?></div>
+                <div class="token-actions">
+                  <button class="tbtn tbtn-copy" onclick="copyToken('<?= htmlspecialchars(addslashes($accessTok)) ?>',this)">📋 Copy Token</button>
+                  <button class="tbtn tbtn-copy" onclick="copyToken('Bearer <?= htmlspecialchars(addslashes($accessTok)) ?>',this)">📋 Copy Bearer</button>
+                  <button class="tbtn tbtn-expand" onclick="toggleExpand('at_<?= $uid ?>')">⤢ Expand</button>
+                </div>
+              <?php else: ?><div style="font-size:12px;color:var(--muted)">No token stored.</div><?php endif; ?>
+            </div>
+
+            <!-- Refresh Token -->
+            <?php if ($refreshTok): ?>
+            <div class="token-block">
+              <div class="tb-label"><span class="ticon">🔄</span>Refresh Token</div>
+              <div class="token-text" id="rt_<?= $uid ?>"><?= htmlspecialchars($refreshTok) ?></div>
+              <div class="token-actions">
+                <button class="tbtn tbtn-copy" onclick="copyToken('<?= htmlspecialchars(addslashes($refreshTok)) ?>',this)">📋 Copy</button>
+                <button class="tbtn tbtn-expand" onclick="toggleExpand('rt_<?= $uid ?>')">⤢ Expand</button>
+              </div>
+            </div>
+            <?php endif; ?>
+
+            <!-- Token History -->
+            <?php if (!empty($u['tokens']) && count($u['tokens']) > 1): ?>
+            <details style="margin-top:6px">
+              <summary style="cursor:pointer;font-size:12px;color:var(--muted2);font-weight:600;padding:6px 0">📜 Token History (<?= count($u['tokens']) ?>)</summary>
+              <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+                <?php foreach (array_slice($u['tokens'],0,5) as $tk): ?>
+                <div style="background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:8px;padding:8px 10px">
+                  <div style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:4px"><?= htmlspecialchars($tk['created_at']) ?></div>
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted2);word-break:break-all;line-height:1.4"><?= htmlspecialchars(mb_substr($tk['token'],0,60)) ?>…
+                    <button class="tbtn tbtn-copy" style="margin-left:6px" onclick="copyToken('<?= htmlspecialchars(addslashes($tk['token'])) ?>',this)">Copy</button>
                   </div>
                 </div>
-              </td>
-              <td>
-                <?php if ($at): ?>
-                <div class="token-wrap">
-                  <span class="token-text" title="Click View for full token"><?= htmlspecialchars(substr($at,0,28)) ?>…</span>
-                  <button class="copy-btn" onclick="showToken('<?= htmlspecialchars(addslashes($at)) ?>','<?= htmlspecialchars(addslashes($name)) ?>')">View</button>
-                  <button class="copy-btn" onclick="copyText('<?= htmlspecialchars(addslashes($at)) ?>',this)">Copy</button>
-                </div>
-                <?php else: ?><span class="badge-na">—</span><?php endif; ?>
-              </td>
-              <td>
-                <div class="login-time-main"><?= htmlspecialchars($lastLogin) ?></div>
-              </td>
-              <td><span class="badge-count"><?= $loginCount ?></span></td>
-              <td>
-                <?php if ($batchCount !== null): ?>
-                  <span class="badge-batch">📚 <?= $batchCount ?></span>
-                  <?php if ($batchUpdated): ?>
-                    <div style="font-size:9px;color:var(--muted);margin-top:3px;font-family:'DM Mono',monospace"><?= $batchUpdated ?></div>
-                  <?php endif; ?>
-                <?php else: ?>
-                  <span class="badge-na">Not fetched</span>
-                <?php endif; ?>
-              </td>
-              <td>
-                <div style="display:flex;flex-direction:column;gap:4px">
-                  <button class="copy-btn" onclick="showDetail(<?= htmlspecialchars(json_encode($u), ENT_QUOTES) ?>)">📋 Detail</button>
-                  <?php if ($at): ?>
-                  <form method="POST" style="display:inline">
-                    <input type="hidden" name="refresh_batches" value="<?= htmlspecialchars($phone) ?>"/>
-                    <button type="submit" class="refresh-btn">🔄 Batches</button>
-                  </form>
-                  <?php endif; ?>
-                  <form method="POST" style="display:inline" onsubmit="return confirm('Delete <?= htmlspecialchars(addslashes($phone)) ?>?')">
-                    <input type="hidden" name="delete_user" value="<?= htmlspecialchars($phone) ?>"/>
-                    <button type="submit" class="del-btn">🗑 Delete</button>
-                  </form>
-                </div>
-              </td>
-            </tr>
-            <?php endforeach; endif; ?>
-          </tbody>
-        </table>
+                <?php endforeach; ?>
+              </div>
+            </details>
+            <?php endif; ?>
+          </div>
+
+          <!-- Footer -->
+          <div class="ucard-foot">
+            <form method="POST" onsubmit="return confirm('Delete user <?= htmlspecialchars(addslashes($ph)) ?>?')">
+              <input type="hidden" name="del" value="<?= htmlspecialchars($ph) ?>">
+              <button type="submit" class="del-btn">🗑 Delete User</button>
+            </form>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted)">First: <?= htmlspecialchars(mb_substr($firstLogin,0,10)) ?></span>
+          </div>
         </div>
+        <?php endforeach; ?>
       </div>
-
-    </div><!-- /content -->
-  </div><!-- /main -->
-</div>
-
-<!-- ── Token Modal ── -->
-<div class="modal" id="tokenModal">
-  <div class="modal-box">
-    <div class="modal-title">
-      <span>🔑 Token — <span id="modalUserName"></span></span>
-      <button class="modal-close" onclick="closeModal('tokenModal')">✕</button>
+      <?php endif; ?>
     </div>
-    <div class="modal-token" id="modalTokenText"></div>
-    <button class="modal-copy" onclick="copyModal()">Copy Token</button>
-  </div>
-</div>
-
-<!-- ── User Detail Panel ── -->
-<div class="detail-panel" id="detailPanel">
-  <div class="detail-box">
-    <h2>
-      <span>👤 User Details</span>
-      <button class="modal-close" onclick="closeModal('detailPanel')">✕</button>
-    </h2>
-    <div id="detailContent"></div>
   </div>
 </div>
 
 <script>
-// Token modal
-function showToken(token, name) {
-  document.getElementById('modalTokenText').textContent = token;
-  document.getElementById('modalUserName').textContent = name;
-  document.getElementById('tokenModal').classList.add('open');
-}
-function closeModal(id) {
-  document.getElementById(id).classList.remove('open');
-}
-document.querySelectorAll('.modal,.detail-panel').forEach(m => {
-  m.addEventListener('click', function(e){ if(e.target===this) this.classList.remove('open'); });
-});
-function copyModal() {
-  const text = document.getElementById('modalTokenText').textContent;
+function copyToken(text, btn) {
   navigator.clipboard.writeText(text).then(() => {
-    const btn = document.querySelector('.modal-copy');
+    const orig = btn.innerHTML;
     btn.textContent = '✓ Copied!';
-    setTimeout(() => btn.textContent = 'Copy Token', 2000);
-  });
-}
-function copyText(text, btn) {
-  navigator.clipboard.writeText(text).then(() => {
-    btn.textContent = '✓ Copied';
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    setTimeout(() => { btn.innerHTML = orig; btn.classList.remove('copied'); }, 2500);
+  }).catch(() => {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    btn.textContent = '✓ Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2500);
   });
 }
 
-// User detail panel
-function showDetail(user) {
-  const labels = {
-    phone: 'Phone',
-    name: 'Name',
-    last_login: 'Last Login',
-    login_count: 'Total Logins',
-    batch_count: 'Batch Count',
-    batch_count_updated: 'Batches Updated',
-    access_token: 'Access Token',
-    refresh_token: 'Refresh Token',
-  };
-  let html = '';
-  for (const [key, label] of Object.entries(labels)) {
-    let val = user[key];
-    if (val === undefined || val === null || val === '') continue;
-    if (key === 'access_token' || key === 'refresh_token') {
-      const short = String(val).slice(0,40) + '…';
-      val = `<span style="cursor:pointer;color:var(--accent)" onclick="copyText('${String(val).replace(/'/g,"\\'")}',this)" title="Click to copy">${short}</span>`;
-    } else {
-      val = `<span>${String(val)}</span>`;
-    }
-    html += `<div class="detail-row"><span class="detail-key">${label}</span><span class="detail-val">${val}</span></div>`;
-  }
-  // Extra fields
-  if (user.extra && typeof user.extra === 'object') {
-    for (const [k, v] of Object.entries(user.extra)) {
-      html += `<div class="detail-row"><span class="detail-key">${k}</span><span class="detail-val">${JSON.stringify(v)}</span></div>`;
-    }
-  }
-  document.getElementById('detailContent').innerHTML = html || '<p style="color:var(--muted);font-size:13px">No additional data.</p>';
-  document.getElementById('detailPanel').classList.add('open');
+function toggleExpand(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('expanded');
 }
 
-// Block devtools on admin
+// Block devtools
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('keydown', e => {
-  if (e.key==='F12' || (e.ctrlKey&&e.shiftKey&&['I','J','C'].includes(e.key)) || (e.ctrlKey&&e.key==='U')) e.preventDefault();
+  if (e.key==='F12'||(e.ctrlKey&&e.shiftKey&&'IJC'.includes(e.key))||(e.ctrlKey&&e.key==='U')) e.preventDefault();
 });
 </script>
 </body>
