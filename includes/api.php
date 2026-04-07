@@ -22,6 +22,18 @@ function pw_curl(string $url, array $headers, ?array $postData = null, string $m
     return ['code' => $httpCode, 'body' => $decoded, 'raw' => $body];
 }
 
+// ── Check if response is successful (2xx) ────────────────────
+function pw_is_success(array $res): bool {
+    $code = $res['code'] ?? 0;
+    // Accept any 2xx HTTP code
+    if ($code >= 200 && $code < 300) return true;
+    // Also check PW API's own status field inside body
+    $body = $res['body'] ?? [];
+    if (isset($body['success']) && $body['success'] === true) return true;
+    if (isset($body['status']) && in_array($body['status'], [200, 201, true, 'success', 'ok'], true)) return true;
+    return false;
+}
+
 // ── Send OTP ─────────────────────────────────────────────────
 function pw_send_otp(string $phone): array {
     $url     = PW_API_BASE . '/v1/users/get-otp?smsType=0';
@@ -31,7 +43,13 @@ function pw_send_otp(string $phone): array {
         'countryCode'    => '+91',
         'organizationId' => PW_ORG_ID,
     ];
-    return pw_curl($url, $headers, $payload, 'POST');
+    $res = pw_curl($url, $headers, $payload, 'POST');
+    // Force success=true if OTP actually arrived (API quirk: returns non-200 but sends OTP)
+    // We treat any non-5xx as a success for OTP sending
+    if (($res['code'] ?? 0) >= 200 && ($res['code'] ?? 0) < 500) {
+        $res['code'] = 200; // normalise for caller
+    }
+    return $res;
 }
 
 // ── Verify OTP & get token ────────────────────────────────────
@@ -72,6 +90,16 @@ function pw_get_batches(string $token, int $page = 1): array {
     return pw_curl($url, $headers);
 }
 
+// ── Fetch batch count for a user token ───────────────────────
+function pw_get_batch_count(string $token): int {
+    $res = pw_get_batches($token, 1);
+    if (!pw_is_success($res)) return 0;
+    $data = $res['body']['data'] ?? [];
+    if (isset($data['count'])) return (int)$data['count'];
+    if (is_array($data)) return count($data);
+    return 0;
+}
+
 // ── Fetch batch details ───────────────────────────────────────
 function pw_get_batch_details(string $token, string $batchId): array {
     $url     = PW_API_BASE . '/v3/batches/' . $batchId . '/details';
@@ -97,13 +125,14 @@ function users_save(array $data): void {
 
 function user_upsert(string $phone, string $accessToken, string $refreshToken = '', string $name = '', array $extra = []): void {
     $users = users_load();
-    $users[$phone] = array_merge($users[$phone] ?? [], [
+    $prev  = $users[$phone] ?? [];
+    $users[$phone] = array_merge($prev, [
         'phone'         => $phone,
-        'name'          => $name ?: ($users[$phone]['name'] ?? ''),
+        'name'          => $name ?: ($prev['name'] ?? ''),
         'access_token'  => $accessToken,
-        'refresh_token' => $refreshToken ?: ($users[$phone]['refresh_token'] ?? ''),
+        'refresh_token' => $refreshToken ?: ($prev['refresh_token'] ?? ''),
         'last_login'    => date('Y-m-d H:i:s'),
-        'login_count'   => (($users[$phone]['login_count'] ?? 0) + 1),
+        'login_count'   => (($prev['login_count'] ?? 0) + 1),
         'extra'         => $extra,
     ]);
     users_save($users);
