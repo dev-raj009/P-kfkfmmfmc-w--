@@ -4,9 +4,8 @@ require_once __DIR__ . '/config.php';
 function session_boot(): void {
     if (session_status() === PHP_SESSION_NONE) {
         session_set_cookie_params([
-            'lifetime' => SESSION_LIFETIME,
+            'lifetime' => SESSION_TTL,
             'path'     => '/',
-            'secure'   => false,   // set true on HTTPS
             'httponly' => true,
             'samesite' => 'Strict',
         ]);
@@ -19,36 +18,46 @@ function is_logged_in(): bool {
     return !empty($_SESSION['user_token']) && !empty($_SESSION['user_phone']);
 }
 
-function is_admin_logged_in(): bool {
+function is_admin(): bool {
     session_boot();
-    return !empty($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+    return !empty($_SESSION['admin_ok']) && $_SESSION['admin_ok'] === true;
 }
 
-function require_login(): void {
-    if (!is_logged_in()) {
-        header('Location: /index.php?msg=Please+login+first');
-        exit;
-    }
+function require_login(string $redirect = '/index.php'): void {
+    if (!is_logged_in()) { header('Location: ' . $redirect); exit; }
 }
 
 function require_admin(): void {
-    if (!is_admin_logged_in()) {
-        header('Location: /admin/index.php?err=1');
-        exit;
-    }
+    if (!is_admin()) { header('Location: /admin/index.php?err=1'); exit; }
 }
 
 function login_user(string $phone, string $token, string $name = ''): void {
     session_boot();
     session_regenerate_id(true);
-    $_SESSION['user_token'] = $token;
-    $_SESSION['user_phone'] = $phone;
-    $_SESSION['user_name']  = $name;
-    $_SESSION['login_time'] = time();
+    $_SESSION['user_phone']  = $phone;
+    $_SESSION['user_token']  = $token;
+    $_SESSION['user_name']   = $name;
+    $_SESSION['login_at']    = time();
 }
 
 function logout_user(): void {
     session_boot();
     $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $p = session_get_cookie_params();
+        setcookie(session_name(), '', time()-42000, $p['path'], $p['domain'], $p['secure'], $p['httponly']);
+    }
     session_destroy();
+}
+
+function login_admin(): void {
+    session_boot();
+    session_regenerate_id(true);
+    $_SESSION['admin_ok'] = true;
+    $_SESSION['admin_at'] = time();
+}
+
+function logout_admin(): void {
+    session_boot();
+    unset($_SESSION['admin_ok'], $_SESSION['admin_at']);
 }

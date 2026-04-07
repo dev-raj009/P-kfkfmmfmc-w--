@@ -1,144 +1,195 @@
 <?php
 require_once __DIR__ . '/config.php';
 
-// ── Generic cURL helper ──────────────────────────────────────
-function pw_curl(string $url, array $headers, ?array $postData = null, string $method = 'GET'): array {
+// ── Generic cURL ─────────────────────────────────────────────
+function pw_curl(string $url, array $headers, ?array $post = null, string $method = 'GET'): array {
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_TIMEOUT        => 20,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_TIMEOUT        => 25,
         CURLOPT_HTTPHEADER     => $headers,
         CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_ENCODING       => 'gzip, deflate',
     ]);
     if ($method === 'POST') {
         curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($postData));
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($post));
     }
-    $body     = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $raw  = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
     curl_close($ch);
-    $decoded = json_decode($body, true);
-    return ['code' => $httpCode, 'body' => $decoded, 'raw' => $body];
+
+    if ($err) return ['ok' => false, 'code' => 0, 'data' => null, 'raw' => $err];
+
+    $json = json_decode($raw, true);
+    return ['ok' => ($code >= 200 && $code < 300), 'code' => $code, 'data' => $json, 'raw' => $raw];
 }
 
-// ── Check if response is successful (2xx) ────────────────────
-function pw_is_success(array $res): bool {
-    $code = $res['code'] ?? 0;
-    // Accept any 2xx HTTP code
-    if ($code >= 200 && $code < 300) return true;
-    // Also check PW API's own status field inside body
-    $body = $res['body'] ?? [];
-    if (isset($body['success']) && $body['success'] === true) return true;
-    if (isset($body['status']) && in_array($body['status'], [200, 201, true, 'success', 'ok'], true)) return true;
-    return false;
-}
-
-// ── Send OTP ─────────────────────────────────────────────────
-function pw_send_otp(string $phone): array {
-    $url     = PW_API_BASE . '/v1/users/get-otp?smsType=0';
-    $headers = pw_base_headers();
-    $payload = [
+// ── 1. SEND OTP ───────────────────────────────────────────────
+// From Python: get_otp() — POST /v1/users/get-otp?smsType=0
+function api_send_otp(string $phone): array {
+    $url  = PW_API . '/v1/users/get-otp?smsType=0';
+    $res  = pw_curl($url, pw_web_headers(), [
         'username'       => $phone,
         'countryCode'    => '+91',
         'organizationId' => PW_ORG_ID,
-    ];
-    $res = pw_curl($url, $headers, $payload, 'POST');
-    // Force success=true if OTP actually arrived (API quirk: returns non-200 but sends OTP)
-    // We treat any non-5xx as a success for OTP sending
-    if (($res['code'] ?? 0) >= 200 && ($res['code'] ?? 0) < 500) {
-        $res['code'] = 200; // normalise for caller
-    }
-    return $res;
+    ], 'POST');
+
+    // PW API returns 200 even on success with various status fields.
+    // We consider it a success if HTTP 200 AND no error key with false
+    $body = $res['data'] ?? [];
+    $success = $res['code'] === 200 && empty($body['error']) && ($body['success'] ?? true) !== false;
+    return ['success' => $success, 'code' => $res['code'], 'body' => $body, 'raw' => $res['raw']];
 }
 
-// ── Verify OTP & get token ────────────────────────────────────
-function pw_verify_otp(string $phone, string $otp): array {
-    $url     = PW_API_BASE . '/v3/oauth/token';
-    $headers = pw_base_headers();
-    $payload = [
+// ── 2. VERIFY OTP & GET TOKEN ─────────────────────────────────
+// From Python: get_token() — POST /v3/oauth/token
+// Returns: access_token + refresh_token
+function api_verify_otp(string $phone, string $otp): array {
+    $url = PW_API . '/v3/oauth/token';
+    $res = pw_curl($url, pw_web_headers(), [
         'username'       => $phone,
         'otp'            => $otp,
         'client_id'      => 'system-admin',
         'client_secret'  => PW_CLIENT_SECRET,
-        'grant_type'     => PW_GRANT_TYPE,
+        'grant_type'     => 'password',
         'organizationId' => PW_ORG_ID,
         'latitude'       => 0,
         'longitude'      => 0,
+    ], 'POST');
+
+    $body         = $res['data'] ?? [];
+    $accessToken  = $body['data']['access_token']  ?? '';
+    $refreshToken = $body['data']['refresh_token'] ?? '';
+    $success      = $res['code'] === 200 && !empty($accessToken);
+    return [
+        'success'       => $success,
+        'access_token'  => $accessToken,
+        'refresh_token' => $refreshToken,
+        'body'          => $body,
+        'code'          => $res['code'],
     ];
-    return pw_curl($url, $headers, $payload, 'POST');
 }
 
-// ── Validate raw token by calling my-batches ─────────────────
-function pw_validate_token(string $token): array {
-    $url     = PW_API_BASE . '/v3/batches/my-batches?mode=1&filter=false&exam=&amount=&organisationId=' . PW_ORG_ID . '&classes=&limit=1&page=1&programId=&ut=1652675230446';
-    $headers = pw_auth_headers($token);
-    return pw_curl($url, $headers);
+// ── 3. GET USER PROFILE ───────────────────────────────────────
+function api_get_profile(string $token): array {
+    $res  = pw_curl(PW_API . '/v1/users/me', pw_mobile_headers($token));
+    $data = $res['data']['data'] ?? [];
+    return ['success' => $res['ok'], 'data' => $data];
 }
 
-// ── Fetch user profile ────────────────────────────────────────
-function pw_get_profile(string $token): array {
-    $url     = PW_API_BASE . '/v1/users/me';
-    $headers = pw_auth_headers($token);
-    return pw_curl($url, $headers);
+// ── 4. MY BATCHES ─────────────────────────────────────────────
+// From Python: pw_login() — GET /v3/batches/my-batches
+function api_get_batches(string $token, int $page = 1): array {
+    $params = http_build_query([
+        'mode'           => '1',
+        'filter'         => 'false',
+        'exam'           => '',
+        'amount'         => '',
+        'organisationId' => PW_ORG_ID,
+        'classes'        => '',
+        'limit'          => '20',
+        'page'           => (string)$page,
+        'programId'      => '',
+        'ut'             => '1652675230446',
+    ]);
+    $res = pw_curl(PW_API . '/v3/batches/my-batches?' . $params, pw_mobile_headers($token));
+    return ['success' => $res['ok'], 'data' => $res['data']['data'] ?? [], 'code' => $res['code']];
 }
 
-// ── Fetch all purchased batches ───────────────────────────────
-function pw_get_batches(string $token, int $page = 1): array {
-    $url     = PW_API_BASE . '/v3/batches/my-batches?mode=1&filter=false&exam=&amount=&organisationId=' . PW_ORG_ID . '&classes=&limit=20&page=' . $page . '&programId=&ut=1652675230446';
-    $headers = pw_auth_headers($token);
-    return pw_curl($url, $headers);
+// ── 5. BATCH DETAILS (subjects) ───────────────────────────────
+// From Python: /v3/batches/{batchId}/details
+function api_get_batch_details(string $token, string $batchId): array {
+    $res = pw_curl(PW_API . '/v3/batches/' . urlencode($batchId) . '/details', pw_mobile_headers($token));
+    return ['success' => $res['ok'], 'data' => $res['data']['data'] ?? []];
 }
 
-// ── Fetch batch count for a user token ───────────────────────
-function pw_get_batch_count(string $token): int {
-    $res = pw_get_batches($token, 1);
-    if (!pw_is_success($res)) return 0;
-    $data = $res['body']['data'] ?? [];
-    if (isset($data['count'])) return (int)$data['count'];
-    if (is_array($data)) return count($data);
-    return 0;
+// ── 6. SUBJECT TOPICS ─────────────────────────────────────────
+// From Python: /v3/batches/{batchId}/subject/{subjectId}/topics
+function api_get_topics(string $token, string $batchId, string $subjectId, int $page = 1): array {
+    $params = http_build_query(['page' => (string)$page]);
+    $url    = PW_API . '/v3/batches/' . urlencode($batchId) . '/subject/' . urlencode($subjectId) . '/topics?' . $params;
+    $res    = pw_curl($url, pw_mobile_headers($token));
+    return ['success' => $res['ok'], 'data' => $res['data']['data'] ?? []];
 }
 
-// ── Fetch batch details ───────────────────────────────────────
-function pw_get_batch_details(string $token, string $batchId): array {
-    $url     = PW_API_BASE . '/v3/batches/' . $batchId . '/details';
-    $headers = pw_auth_headers($token);
-    return pw_curl($url, $headers);
+// ── 7. SUBJECT CONTENTS (videos, notes, DPP) ─────────────────
+// From Python commented section: /v3/batches/{batchId}/subject/{subjectId}/contents
+function api_get_contents(string $token, string $batchId, string $subjectId, string $type = 'videos', int $page = 1): array {
+    $params = http_build_query(['page' => (string)$page, 'tag' => '', 'contentType' => $type]);
+    $url    = PW_API . '/v3/batches/' . urlencode($batchId) . '/subject/' . urlencode($subjectId) . '/contents?' . $params;
+    $res    = pw_curl($url, pw_mobile_headers($token));
+    return ['success' => $res['ok'], 'data' => $res['data']['data'] ?? []];
 }
 
-// ─────────────────────────────────────────────────────────────
-//  USER STORAGE  (JSON file — no DB needed)
-// ─────────────────────────────────────────────────────────────
+// ── 8. VALIDATE TOKEN (check if token works) ─────────────────
+function api_validate_token(string $token): bool {
+    $r = api_get_batches($token, 1);
+    return $r['success'];
+}
+
+// ════════════════════════════════════════════════════════════
+//  USER STORAGE (JSON file)
+// ════════════════════════════════════════════════════════════
+
 function users_load(): array {
-    $file = USERS_FILE;
-    if (!file_exists($file)) return [];
-    $data = json_decode(file_get_contents($file), true);
-    return is_array($data) ? $data : [];
+    if (!file_exists(USERS_FILE)) return [];
+    $d = json_decode(file_get_contents(USERS_FILE), true);
+    return is_array($d) ? $d : [];
 }
 
 function users_save(array $data): void {
     $dir = dirname(USERS_FILE);
     if (!is_dir($dir)) mkdir($dir, 0755, true);
-    file_put_contents(USERS_FILE, json_encode($data, JSON_PRETTY_PRINT));
+    file_put_contents(USERS_FILE, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
 
-function user_upsert(string $phone, string $accessToken, string $refreshToken = '', string $name = '', array $extra = []): void {
-    $users = users_load();
-    $prev  = $users[$phone] ?? [];
-    $users[$phone] = array_merge($prev, [
+function user_upsert(string $phone, string $accessToken, string $refreshToken = '', string $name = '', string $email = ''): void {
+    $users  = users_load();
+    $prev   = $users[$phone] ?? [];
+    $tokens = $prev['tokens'] ?? [];
+
+    // Store token history (latest first, max 10)
+    array_unshift($tokens, [
+        'token'      => $accessToken,
+        'created_at' => date('Y-m-d H:i:s'),
+    ]);
+    $tokens = array_slice($tokens, 0, 10);
+
+    $users[$phone] = [
         'phone'         => $phone,
-        'name'          => $name ?: ($prev['name'] ?? ''),
+        'name'          => $name  ?: ($prev['name']  ?? ''),
+        'email'         => $email ?: ($prev['email'] ?? ''),
         'access_token'  => $accessToken,
         'refresh_token' => $refreshToken ?: ($prev['refresh_token'] ?? ''),
-        'last_login'    => date('Y-m-d H:i:s'),
+        'tokens'        => $tokens,
+        'token_count'   => count($tokens),
         'login_count'   => (($prev['login_count'] ?? 0) + 1),
-        'extra'         => $extra,
-    ]);
+        'last_login'    => date('Y-m-d H:i:s'),
+        'first_login'   => $prev['first_login'] ?? date('Y-m-d H:i:s'),
+        'batch_count'   => $prev['batch_count'] ?? 0,
+    ];
     users_save($users);
+}
+
+function user_update_batches(string $phone, int $count): void {
+    $users = users_load();
+    if (isset($users[$phone])) {
+        $users[$phone]['batch_count'] = $count;
+        users_save($users);
+    }
 }
 
 function user_get(string $phone): ?array {
     $users = users_load();
     return $users[$phone] ?? null;
+}
+
+function user_delete(string $phone): void {
+    $users = users_load();
+    unset($users[$phone]);
+    users_save($users);
 }
