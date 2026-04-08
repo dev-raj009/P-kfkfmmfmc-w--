@@ -96,22 +96,32 @@ function api_get_profile(string $token): array {
 //  GET /v3/batches/my-batches with exact params from Python file
 // ─────────────────────────────────────────────────────────────
 function api_get_batches(string $token, int $page = 1): array {
-    $q = http_build_query([
-        'mode'           => '1',
-        'filter'         => 'false',
-        'exam'           => '',
-        'amount'         => '',
-        'organisationId' => PW_ORG_ID,
-        'classes'        => '',
-        'limit'          => '20',
-        'page'           => (string)$page,
-        'programId'      => '',
-        'ut'             => '1652675230446',
+    // Try primary endpoint: my-batches (paid)
+    $q1 = http_build_query([
+        'mode'   => '1',
+        'amount' => 'paid',
+        'page'   => (string)$page,
     ]);
-    $res = pw_curl(PW_API . '/v3/batches/my-batches?' . $q, pw_mobile_headers($token));
+    $res = pw_curl(PW_API . '/v3/batches/my-batches?' . $q1, pw_mobile_headers($token));
+    $data = $res['data']['data'] ?? [];
+
+    // If empty, try all-purchased-batches endpoint (used by pwfree.py)
+    if (empty($data)) {
+        $q2  = http_build_query(['mode' => '1', 'page' => (string)$page]);
+        $res = pw_curl(PW_API . '/v3/batches/all-purchased-batches?' . $q2, pw_mobile_headers($token));
+        $data = $res['data']['data'] ?? [];
+    }
+
+    // If still empty, try without amount filter
+    if (empty($data)) {
+        $q3  = http_build_query(['mode' => '1', 'page' => (string)$page]);
+        $res = pw_curl(PW_API . '/v3/batches/my-batches?' . $q3, pw_mobile_headers($token));
+        $data = $res['data']['data'] ?? [];
+    }
+
     return [
-        'success' => $res['ok'],
-        'data'    => $res['data']['data'] ?? [],
+        'success' => ($res['code'] >= 200 && $res['code'] < 300),
+        'data'    => $data,
         'code'    => $res['code'],
     ];
 }
@@ -138,12 +148,23 @@ function api_get_batch_details(string $token, string $batchId): array {
 //  GET /v3/batches/{batchId}/subject/{subjectId}/contents
 // ─────────────────────────────────────────────────────────────
 function api_get_contents(string $token, string $batchId, string $subjectId, string $type = 'videos', int $page = 1): array {
-    $q   = http_build_query(['page' => (string)$page, 'tag' => '', 'contentType' => $type]);
-    $url = PW_API . '/v3/batches/' . urlencode($batchId) . '/subject/' . urlencode($subjectId) . '/contents?' . $q;
+    // v2 endpoint — matches Python process_subject_content()
+    $q   = http_build_query(['page' => (string)$page, 'contentType' => $type]);
+    $url = PW_API . '/v2/batches/' . urlencode($batchId) . '/subject/' . urlencode($subjectId) . '/contents?' . $q;
     $res = pw_curl($url, pw_mobile_headers($token));
+    $data = $res['data']['data'] ?? [];
+
+    // Fallback to v3 if v2 returns nothing
+    if (empty($data)) {
+        $q2  = http_build_query(['page' => (string)$page, 'tag' => '', 'contentType' => $type]);
+        $url2 = PW_API . '/v3/batches/' . urlencode($batchId) . '/subject/' . urlencode($subjectId) . '/contents?' . $q2;
+        $res = pw_curl($url2, pw_mobile_headers($token));
+        $data = $res['data']['data'] ?? [];
+    }
+
     return [
         'success' => $res['ok'],
-        'data'    => $res['data']['data'] ?? [],
+        'data'    => $data,
     ];
 }
 

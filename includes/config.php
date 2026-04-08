@@ -39,10 +39,10 @@ function pw_mobile_headers(string $token): array {
         'authorization: Bearer ' . $token,
         'client-id: ' . PW_CLIENT_ID,
         'client-version: 12.84',
-        'user-agent: Android',
-        'randomid: ' . bin2hex(random_bytes(8)),
-        'client-type: MOBILE',
-        'device-meta: {APP_VERSION:12.84,DEVICE_MAKE:Asus,DEVICE_MODEL:ASUS_X00TD,OS_VERSION:6,PACKAGE_NAME:xyz.penpencil.physicswalb}',
+        'Client-Type: MOBILE',
+        'randomId: ' . bin2hex(random_bytes(8)),
+        'user-agent: Dalvik/2.1.0 (Linux; U; Android 9; ASUS_X00TD Build/PI)',
+        'Accept: application/json, text/plain, */*',
         'content-type: application/json; charset=UTF-8',
     ];
 }
