@@ -1,26 +1,21 @@
 <?php
-// ============================================================
-//  PW PORTAL v2 — CONFIGURATION
-//  Keep this file ABOVE web root or protected via .htaccess
-// ============================================================
+// ================================================================
+//  PW PORTAL v3 — CONFIG
+// ================================================================
+define('PW_API',           'https://api.penpencil.co');
+define('PW_CLIENT_ID',     '5eb393ee95fab7468a79d189');
+define('PW_CLIENT_SECRET', 'KjPXuAVfC5xbmgreETNMaL7z');
+define('PW_ORG_ID',        '5eb393ee95fab7468a79d189');
 
-// ── PW API ──────────────────────────────────────────────────
-define('PW_API',            'https://api.penpencil.co');
-define('PW_CLIENT_ID',      '5eb393ee95fab7468a79d189');
-define('PW_CLIENT_SECRET',  'KjPXuAVfC5xbmgreETNMaL7z');
-define('PW_ORG_ID',         '5eb393ee95fab7468a79d189');
+// Admin credentials — change here
+define('ADMIN_USER',      'raj');
+define('ADMIN_PASS_HASH', hash('sha256', 'rajtoken'));
 
-// ── ADMIN CREDENTIALS ───────────────────────────────────────
-// Change 'Admin@PW#Secure2024' to your own password
-define('ADMIN_USER',        'admin');
-define('ADMIN_PASS_HASH',   hash('sha256', 'Admin@PW#Secure2024'));
+// Storage
+define('USERS_FILE', __DIR__ . '/../data/users.json');
+define('SESSION_TTL', 86400); // 24 hours
 
-// ── STORAGE ─────────────────────────────────────────────────
-define('USERS_FILE',   __DIR__ . '/../data/users.json');
-define('SESSION_TTL',  7200);   // 2 hours user session
-define('ADMIN_TTL',    3600);   // 1 hour admin session
-
-// ── WEB HEADERS (OTP + Token request) ───────────────────────
+// ── WEB headers (OTP + token fetch)
 function pw_web_headers(): array {
     return [
         'Content-Type: application/json',
@@ -28,10 +23,7 @@ function pw_web_headers(): array {
         'Client-Type: WEB',
         'Client-Version: 2.6.12',
         'Integration-With: Origin',
-        'Randomid: ' . sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0,0xffff), mt_rand(0,0xffff), mt_rand(0,0xffff),
-            mt_rand(0,0x0fff)|0x4000, mt_rand(0,0x3fff)|0x8000,
-            mt_rand(0,0xffff), mt_rand(0,0xffff), mt_rand(0,0xffff)),
+        'Randomid: ' . bin2hex(random_bytes(16)),
         'Referer: https://www.pw.live/',
         'Sec-Ch-Ua: "Not A(Brand";v="99", "Microsoft Edge";v="121", "Chromium";v="121"',
         'Sec-Ch-Ua-Mobile: ?0',
@@ -40,8 +32,7 @@ function pw_web_headers(): array {
     ];
 }
 
-// ── MOBILE HEADERS (Batches, Subjects, Topics, Contents) ────
-// Exact replica from Python file pw__2_.py
+// ── MOBILE headers (batches, subjects, contents) — from Python file
 function pw_mobile_headers(string $token): array {
     return [
         'Host: api.penpencil.co',
