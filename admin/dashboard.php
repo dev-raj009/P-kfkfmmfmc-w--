@@ -207,10 +207,35 @@ aside{width:220px;background:var(--s1);border-right:1px solid var(--b1);position
 .th-tok{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--m2);word-break:break-all;line-height:1.4}
 
 @media(max-width:820px){aside{display:none}.main{margin-left:0}}
-@media(max-width:640px){.cnt{padding:16px 14px}.tb{padding:0 14px}.stats{grid-template-columns:1fr 1fr}.ucards{grid-template-columns:1fr}}
+@media(max-width:640px){
+  .cnt{padding:16px 14px}
+  .tb{padding:0 14px}
+  .stats{grid-template-columns:1fr 1fr}
+  .ucards{grid-template-columns:1fr}
+  /* Mobile: hide sidebar, show content full width */
+  aside{display:none}
+  .main{margin-left:0!important}
+  .tb{flex-wrap:wrap;height:auto;padding:10px 14px;gap:8px}
+  .tb-srch{max-width:100%;width:100%}
+  .tb-r{margin-left:0}
+  /* Mobile nav bar at top instead */
+  .mob-nav{display:flex!important}
+}
+.mob-nav{display:none;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(3,3,10,.97);border-bottom:1px solid var(--b1);position:sticky;top:0;z-index:60}
+.mob-brand{font-weight:900;font-size:15px}.mob-brand span{color:#f97316}
+.mob-lo{padding:5px 11px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);border-radius:8px;color:#fca5a5;font-size:11px;font-weight:700;text-decoration:none}
+
 </style>
 </head>
 <body>
+<!-- Mobile nav (shows only on small screens) -->
+<div class="mob-nav">
+  <span class="mob-brand">PW<span>Admin</span></span>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span style="font-size:11px;color:var(--muted)">🔐 <?= htmlspecialchars(ADMIN_USER) ?></span>
+    <a href="?logout=1" class="mob-lo">Logout</a>
+  </div>
+</div>
 <div class="layout">
 
   <!-- Sidebar -->
