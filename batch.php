@@ -83,9 +83,10 @@ nav{height:56px;display:flex;align-items:center;justify-content:space-between;pa
     <?php else: ?>
       <div class="slist">
         <?php foreach ($subjects as $i => $s):
-          $sId   = $s['subjectId'] ?? ($s['_id'] ?? '');
+          // API returns _id as the subject ID (not subjectId)
+          $sId   = $s['_id'] ?? ($s['subjectId'] ?? '');
           $sName = $s['subject'] ?? 'Subject';
-          $cnt   = $s['tagCount'] ?? 0;
+          $cnt   = $s['tagCount'] ?? ($s['contentCount'] ?? 0);
         ?>
         <a href="/subject.php?bid=<?= urlencode($bid) ?>&sid=<?= urlencode($sId) ?>&sn=<?= urlencode($sName) ?>&bt=<?= urlencode($title) ?>" class="sc">
           <div class="sc-ic"><?= $icons[$i % count($icons)] ?></div>

@@ -14,6 +14,14 @@ $page    = max(1, (int)($_GET['p'] ?? 1));
 $r       = api_get_batches($token, $page);
 $batches = $r['data'] ?? [];
 $failed  = !$r['success'];
+$apiCode = $r['code'] ?? 0;
+
+// If token expired (401), force logout
+if ($apiCode === 401) {
+    do_logout();
+    header('Location: /index.php?m=Session+expired.+Please+login+again.');
+    exit;
+}
 
 // Update batch count in storage
 if (!$failed && !empty($batches)) {

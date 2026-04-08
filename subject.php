@@ -170,9 +170,15 @@ nav{height:56px;display:flex;align-items:center;justify-content:space-between;pa
           if (!empty($n['url'])) $links[] = $n['url'];
           if (!empty($n['homeworkIds'])) {
             foreach ($n['homeworkIds'] as $hw) {
-              $bu = $hw['attachmentIds']['baseUrl'] ?? '';
-              $ky = $hw['attachmentIds']['key']     ?? '';
-              if ($bu && $ky) $links[] = $bu . $ky;
+              // attachmentIds is an array of objects
+              $attachments = $hw['attachmentIds'] ?? [];
+              if (is_array($attachments)) {
+                foreach ($attachments as $att) {
+                  $bu = $att['baseUrl'] ?? '';
+                  $ky = $att['key']     ?? '';
+                  if ($bu && $ky) $links[] = $bu . $ky;
+                }
+              }
             }
           }
           $isDpp = ($ctype === 'DppNotes');
